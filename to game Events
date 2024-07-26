@@ -1,0 +1,114 @@
+WITH firebase AS (
+    SELECT
+        --IFF(VENDOR_ID IS NULL OR VENDOR_ID = '', ADVERTISING_ID, VENDOR_ID) AS UNIQUE_USER_ID1,
+        case when advertising_id is null or advertising_id = '' then vendor_id 
+                else advertising_id end as custom_id,
+        event_name,
+        EVENT_PARAMS_VALUE,
+        country,
+        max(EVENT_PARAMS_VALUE:test_name:string_value) OVER (PARTITION BY custom_id) AS test_name,
+        max(EVENT_PARAMS_VALUE:group_name:string_value) OVER (PARTITION BY custom_id) AS group_name,
+        datediff(day, to_date(USER_FIRST_TOUCH_TIMESTAMP), to_date(EVENT_TIMESTAMP)) as day     
+    FROM "SEVEREX"."ADJUST"."EVENTS_FIREBASE_SHORT"
+    --WHERE PROJECT_ID = 'photo-retouch-73e7c'
+    WHERE PROJECT_ID = 'pindoku-dd54b'
+    AND EVENT_DATE BETWEEN '20240705' AND '20240707'
+    AND TO_DATE(EVENT_TIMESTAMP) between '2024-07-05' AND '2024-07-07'
+    AND TO_DATE(USER_FIRST_TOUCH_TIMESTAMP) BETWEEN '2024-07-05' AND '2024-07-06'
+    AND PLATFORM = 'android'
+    --AND PLATFORM = 'ios'
+    --AND country = 'Russia'
+    AND EVENT_NAME not in ('user_engagement', 'screen_view', 'ad_impression', 'session_start',
+                           'app_clear_data', 'app_exception', 'app_settings_fetch_error', 'app_update',
+                           'os_update', 'refund') 
+    AND custom_id not in ('00000000-0000-0000-0000-000000000000','0000-0000')
+)   
+,
+
+----кумулятивные старты игр и интеры/реварды----
+/*daily_counts AS (
+    SELECT
+           CASE 
+           WHEN group_name IN ('Control', 'Control_copy') THEN 'control_combined'
+           ELSE group_name
+           END AS group_name,
+           day,
+           COUNT(custom_id) AS daily_starts
+    FROM firebase  
+    WHERE test_name = 'inter_after_2_gp_UA'
+    --AND event_name = 'game_win'
+    AND event_name = 'ads_rewarded_impression'
+    AND day between 0 and 7
+    GROUP BY 1, 2
+)
+
+SELECT
+    group_name,
+    day,
+    SUM(daily_starts) OVER (PARTITION BY group_name ORDER BY day) AS cumulative_starts
+FROM daily_counts
+ORDER BY group_name, day
+
+
+-----КОЛИЧЕСТВО УНИКАЛЬНЫХ ЮЗЕРОВ В ГРУППЕ-----
+SELECT CASE 
+           WHEN group_name IN ('Control', 'Control_copy') THEN 'control_combined'
+           ELSE group_name END AS group_name,
+       count(distinct custom_id )
+FROM firebase
+WHERE test_name = 'inter_after_2_gp_UA'
+Group by 1
+*/
+
+adjust AS (
+    SELECT 
+        distinct case when idfa_gps_adid is null or idfa_gps_adid = '' then idfv  else idfa_gps_adid end as custom_id   
+    FROM SEVEREX.ADJUST.EVENTS
+    --WHERE APP_ID = '1621536290'
+    --WHERE APP_ID = 'com.photo.retouch.objects.remove'
+    WHERE APP_ID = 'com.severex.jigsaw.puzzle.pindoku'
+    AND TO_DATE(created_at) BETWEEN '2024-07-05' AND '2024-07-07'
+    AND TO_DATE(installed_at) BETWEEN '2024-07-05' AND '2024-07-07'
+    --AND EVENT_NAME != 'subscription_refunded'
+    --AND ad_mediation_platform = 'applovin_max_sdk'
+    --AND country = 'ru'
+)
+
+SELECT
+       CASE 
+           WHEN group_name IN ('control', 'control_copy') THEN 'control_combined'
+           ELSE group_name 
+       END as combined_group_name,
+       count(*) as starts,
+       (select count(distinct custom_id) from firebase WHERE test_name = 'pj_gp_ru_onboarding_new_restart'
+                                                AND group_name in ('control', 'control_copy') ) as installs_Control,
+       (select count(distinct custom_id) from firebase WHERE test_name = 'pj_gp_ru_onboarding_new_restart'
+                                                AND group_name in ('variant_A') ) as installs_Variant_A
+FROM firebase f
+RIGHT JOIN adjust a ON f.custom_id = a.custom_id
+WHERE combined_group_name != 'Variant_C'
+--AND event_name = 'game_start'
+AND event_name = 'game_start'
+AND test_name = 'pj_gp_gb_onboarding_vector_content'
+AND DAY between 0 and 1
+GROUP BY combined_group_name
+ORDER BY combined_group_name
+
+
+SELECT
+       CASE 
+           WHEN group_name IN ('control', 'control_copy') THEN 'control_combined'
+           ELSE group_name 
+       END as combined_group_name,
+       EVENT_PARAMS_VALUE:picture_id:string_value AS picture_id,
+       count(distinct f.custom_id) as starts
+FROM firebase f
+RIGHT JOIN adjust a ON f.custom_id = a.custom_id
+--WHERE combined_group_name != 'Variant_C'
+WHERE combined_group_name = 'ru_onboarding_vector_content'
+--AND event_name = 'game_start'
+AND event_name = 'game_start'
+AND test_name = 'pj_gp_ru_onboarding_vector_content'
+AND DAY between 0 and 1
+GROUP BY combined_group_name, picture_id
+ORDER BY combined_group_name, starts desc
