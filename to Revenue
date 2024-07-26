@@ -1,0 +1,157 @@
+WITH firebase AS (
+    SELECT
+        --IFF(VENDOR_ID IS NULL OR VENDOR_ID = '', ADVERTISING_ID, VENDOR_ID) AS UNIQUE_USER_ID1,
+        case when advertising_id is null or advertising_id = '' then vendor_id 
+                else advertising_id end as custom_id,
+        event_name,
+        country,
+        max(EVENT_PARAMS_VALUE:test_name:string_value) OVER (PARTITION BY custom_id) AS test_name,
+        max(EVENT_PARAMS_VALUE:group_name:string_value) OVER (PARTITION BY custom_id) AS group_name,
+        datediff(day, to_date(USER_FIRST_TOUCH_TIMESTAMP), to_date(EVENT_TIMESTAMP)) as day     
+    FROM "SEVEREX"."ADJUST"."EVENTS_FIREBASE_SHORT"
+    --WHERE PROJECT_ID = 'photo-retouch-73e7c'
+    WHERE PROJECT_ID = 'pindoku-dd54b'
+    AND EVENT_DATE BETWEEN '20240618' AND '20240708'
+    AND TO_DATE(EVENT_TIMESTAMP) between '2024-06-18' AND '2024-07-08'
+    AND TO_DATE(USER_FIRST_TOUCH_TIMESTAMP) BETWEEN '2024-06-18' AND '2024-07-05'
+    AND PLATFORM = 'android'
+    --AND PLATFORM = 'ios'
+    --AND country = 'Russia'
+    AND EVENT_NAME not in ('user_engagement', 'screen_view', 'ad_impression', 'session_start',
+                           'app_clear_data', 'app_exception', 'app_settings_fetch_error', 'app_update',
+                           'os_update', 'refund') 
+    AND custom_id not in ('00000000-0000-0000-0000-000000000000','0000-0000')
+)   
+,
+
+----кумулятивные старты игр и интеры/реварды----
+/*daily_counts AS (
+    SELECT
+           CASE 
+           WHEN group_name IN ('Control', 'Control_copy') THEN 'control_combined'
+           ELSE group_name
+           END AS group_name,
+           day,
+           COUNT(custom_id) AS daily_starts
+    FROM firebase  
+    WHERE test_name = 'inter_after_2_gp_UA'
+    --AND event_name = 'game_win'
+    AND event_name = 'ads_rewarded_impression'
+    AND day between 0 and 7
+    GROUP BY 1, 2
+)
+
+SELECT
+    group_name,
+    day,
+    SUM(daily_starts) OVER (PARTITION BY group_name ORDER BY day) AS cumulative_starts
+FROM daily_counts
+ORDER BY group_name, day
+
+
+-----КОЛИЧЕСТВО УНИКАЛЬНЫХ ЮЗЕРОВ В ГРУППЕ-----
+SELECT CASE 
+           WHEN group_name IN ('Control', 'Control_copy') THEN 'control_combined'
+           ELSE group_name END AS group_name,
+       count(distinct custom_id )
+FROM firebase
+WHERE test_name = 'inter_after_2_gp_UA'
+Group by 1
+*/
+
+
+        
+
+firebase_filtered AS (
+    SELECT distinct custom_id, test_name, group_name
+    FROM firebase
+    WHERE test_name = 'pr_landing_ios_latam_es'
+    
+),
+
+adjust AS (
+    SELECT 
+        case when idfa_gps_adid is null or idfa_gps_adid = '' then idfv  else idfa_gps_adid end as custom_id,
+        IFF(event_name is NULL or event_name = '', activity_kind, event_name) as event_name,
+        REVENUE_USD,
+        ad_mediation_platform,
+        CAMPAIGN_NAME,
+        ad_revenue_unit,
+        DATEDIFF(day, to_date(INSTALLED_AT), to_date(CREATED_AT)) as day
+    FROM SEVEREX.ADJUST.EVENTS
+    --WHERE APP_ID = '1621536290'
+    --WHERE APP_ID = 'com.photo.retouch.objects.remove'
+    WHERE APP_ID = 'com.severex.jigsaw.puzzle.pindoku'
+    AND TO_DATE(created_at) BETWEEN '2024-06-18' AND '2024-07-08'
+    AND TO_DATE(installed_at) BETWEEN '2024-06-18' AND '2024-07-05'
+    --AND EVENT_NAME != 'subscription_refunded'
+    --AND ad_mediation_platform = 'applovin_max_sdk'
+    --AND country = 'ru'
+)
+
+SELECT
+    CASE 
+           WHEN group_name IN ('control', 'control_copy') THEN 'control_combined'
+           ELSE group_name 
+       END as combined_group_name,
+    COUNT(DISTINCT f.custom_id) AS installs,
+    COUNT(DISTINCT CASE WHEN a.event_name = 'trial_started' THEN f.custom_id END) AS trial_started,
+    COUNT(DISTINCT CASE WHEN a.event_name = 'trial_converted' THEN f.custom_id END) AS trial_converted,
+    COUNT(DISTINCT CASE WHEN a.event_name = 'subscription_started' THEN f.custom_id END) AS subscription_started,
+    COUNT(DISTINCT CASE WHEN a.event_name = 'subscription_renewed' THEN f.custom_id END) AS subscription_renewed
+FROM firebase_filtered f
+LEFT JOIN adjust a ON f.custom_id = a.custom_id
+GROUP BY combined_group_name
+ORDER BY combined_group_name
+
+
+
+SELECT day,
+       CASE 
+           WHEN group_name IN ('control', 'control_copy') THEN 'control_combined'
+           ELSE group_name 
+       END as combined_group_name,
+       count(distinct f.custom_id) as users,
+       sum(SUM(revenue_usd)) OVER (PARTITION BY combined_group_name ORDER BY day) as cumulative_revenue
+FROM firebase_filtered f
+JOIN adjust a ON f.custom_id = a.custom_id
+WHERE combined_group_name != 'Variant_C'
+AND ad_mediation_platform = 'applovin_max_sdk'
+--AND ad_revenue_unit = '50ba727c3ab75617' --reward
+--AND ad_revenue_unit = 'eaacd5725d47c3f5' --banner
+--AND ad_revenue_unit = '2143af99d153d277' --inter
+--AND CAMPAIGN_NAME = 'UN_PJ_GP_CPI_RU_22.3.24 (65fd588cfe71bc6a44e20006)'
+--AND CAMPAIGN_NAME = 'UN_PJ_GP_AdROAS_RU(0d)_26.03.2024 (6602f29da19e3724f9a1ea2d)' 
+--AND event_name = 'purchase'
+--AND event_name in ('trial_converted', 'subscription_started')
+--AND test_name = 'pj_gp_ru_continue_button_new'
+AND DAY between 0 and 3
+GROUP BY day, combined_group_name
+ORDER BY day, combined_group_name
+
+
+
+
+
+SELECT day,
+       CASE 
+           WHEN group_name IN ('control', 'control_copy') THEN 'control_combined'
+           ELSE group_name 
+       END as combined_group_name,
+       count(distinct f.custom_id) as users,
+       count(revenue_usd) as ads_count,
+       sum(revenue_usd) as revenue_ads,
+       revenue_ads / ads_count * 1000 as eCPM, 
+       sum(COUNT(revenue_usd)) OVER (PARTITION BY combined_group_name ORDER BY day) as cumulative_count,  
+FROM firebase_filtered f
+JOIN adjust a ON f.custom_id = a.custom_id
+WHERE combined_group_name != 'Variant_C'
+AND ad_mediation_platform = 'applovin_max_sdk'
+--AND ad_revenue_unit = '50ba727c3ab75617' --reward
+--AND ad_revenue_unit = 'eaacd5725d47c3f5' --banner
+AND ad_revenue_unit = '2143af99d153d277' --inter
+--AND CAMPAIGN_NAME = 'UN_PJ_GP_CPI_RU_22.3.24 (65fd588cfe71bc6a44e20006)'
+--AND CAMPAIGN_NAME = 'UN_PJ_GP_AdROAS_RU(0d)_26.03.2024 (6602f29da19e3724f9a1ea2d)' 
+AND DAY between 0 and 1
+GROUP BY day, combined_group_name
+ORDER BY day, combined_group_name
